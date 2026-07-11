@@ -492,7 +492,7 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
             </div>
             <div className="choice-grid">
               <ChoiceCard selected={draft.scoring_method === 'sum'} title={scoringLabels.sum} text="Подходит для общего объема результата" onClick={() => set('scoring_method', 'sum')} />
-              <ChoiceCard selected={draft.scoring_method === 'average'} title={scoringLabels.average} text="Подходит для сравнения команд по среднему значению" onClick={() => set('scoring_method', 'average')} />
+              <ChoiceCard selected={draft.scoring_method === 'average'} title={scoringLabels.average} text="Подходит для сравнения команд по среднему значению." onClick={() => set('scoring_method', 'average')} />
             </div>
             {draft.level === 'team' && <div className="team-formation">
               <h3>Формирование команд</h3>
