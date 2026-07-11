@@ -206,8 +206,8 @@ tbody tr:hover { background: #fdfdfc; }
 .team-file small { color: var(--muted); font-size: 11px; }
 .team-file.has-file { border-style: solid; border-color: #a7dbc9; background: #f3fbf8; }
 .upload-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.upload-grid.single { max-width: 420px; grid-template-columns: 1fr; }
-.upload-box { min-height: 76px; display: grid; grid-template-columns: 36px minmax(0, 1fr); grid-template-rows: auto auto; align-content: center; column-gap: 10px; row-gap: 3px; padding: 12px; border: 1px dashed #cfd2d7; border-radius: 10px; background: #fafafa; cursor: pointer; text-align: left; }
+.upload-grid.single { max-width: 220px; grid-template-columns: 1fr; }
+.upload-box { min-height: 56px; display: grid; grid-template-columns: 36px minmax(0, 1fr); grid-template-rows: auto auto; align-content: center; column-gap: 10px; row-gap: 3px; padding: 12px; border: 1px dashed #cfd2d7; border-radius: 10px; background: #fafafa; cursor: pointer; text-align: left; }
 .upload-box:hover { border-color: #ff9c78; background: #fff8f5; }
 .upload-box input { display: none; }
 .upload-box > div { grid-row: 1 / 3; display: grid; place-items: center; width: 36px; height: 36px; border-radius: 9px; color: var(--accent); background: #fff0ea; }

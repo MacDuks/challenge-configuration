@@ -269,7 +269,6 @@ function ChallengeList({ challenges, onCreate, onEdit, notice }: {
                   <td>{activityLabels[challenge.activity_key]}</td>
                   <td><span className="participant-cell"><Users size={15} />{challenge.participants}</span></td>
                   <td>{challenge.period}</td>
-                  <td>{challenge.company_name ?? '—'}</td>
                   <td><span className={`status-badge ${challenge.status}`}><i />{statusLabels[challenge.status]}</span></td>
                   <td><button className="row-action" disabled={editingDisabled} onClick={() => onEdit(challenge)}>{editingDisabled ? 'Недоступно' : 'Редактировать'}</button></td>
                 </tr>
@@ -392,16 +391,24 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
 
   return (
     <main className="create-page">
+
       <div className="create-heading page-content">
+        
         <button className="back-link" onClick={onBack}><ChevronLeft size={19} />К челленджам</button>
         <span className="eyebrow">{isEditing ? 'Редактирование' : 'Новый челлендж'}</span>
         <h1>{isEditing ? 'Редактирование челленджа' : 'Создание челленджа'}</h1>
         <p>{isEditing ? 'Обновите параметры, механику и оформление челленджа.' : 'Заполните основную информацию и настройте механику челленджа.'}</p>
+        
       </div>
+
       <div className="builder-layout page-content">
         <div className="form-column">
           {notice && <div className="form-error">{notice}</div>}
-          <FormSection number="01" title="Основная информация" subtitle="Название и описание для участников">
+          <FormSection 
+            number="01" 
+            title="Основная информация" 
+            subtitle="Название и описание для участников"
+          >
             <Field label="Название челленджа" hint={`${draft.title.length}/60`}>
               <input maxLength={60} value={draft.title} onChange={(e) => set('title', e.target.value)} placeholder="Например, 100 000 шагов вместе" />
             </Field>
@@ -515,8 +522,10 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
             </div>}
           </FormSection>}
           <FormSection number={draft.challenge_type === 'competitive' ? '07' : '06'} title="Оформление" subtitle="Добавьте фирменный стиль челленджа">
+          
             <div className={`upload-grid ${draft.visibility === 'public' ? 'single' : ''}`}>
-              {draft.visibility === 'private' && <UploadBox label="Логотип челленджа" note="PNG или SVG, до 5 МБ" />}
+              {draft.visibility === 'private' && 
+              <UploadBox label="Логотип челленджа" note="PNG или SVG, до 5 МБ" />}
               <UploadBox label="Основная обложка" note="PNG или JPG, 1200×640" />
             </div>
           </FormSection>
@@ -540,11 +549,15 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
   )
 }
 
-function FormSection({ number, title, subtitle, children }: { number: string; title: string; subtitle: string; children: React.ReactNode }) {
-  return <section className="form-section"><div className="section-heading"><span>{number}</span><div><h2>{title}</h2><p>{subtitle}</p></div></div><div className="section-body">{children}</div></section>
+function FormSection({title, subtitle, children }: {title: string; subtitle: string; children: React.ReactNode }) 
+{
+  return <section className="form-section">
+  <div className="section-heading">
+  <div><h2>{title}</h2><p>{subtitle}</p></div></div><div className="section-body">{children}</div></section>
 }
 
-function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) {
+function Field({ label, hint, children }: { label: string; hint?: string; children: React.ReactNode }) 
+{
   return <label className="field"><span>{label}{hint && <small>{hint}</small>}</span>{children}</label>
 }
 
