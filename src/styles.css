@@ -140,7 +140,7 @@ tbody tr:hover { background: #fdfdfc; }
 .select-card.selected { color: var(--accent); border-color: #ffb499; background: #fff8f5; }
 .select-card.selected i { border: 3px solid var(--accent); }
 .choice-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
-.choice-card { position: relative; display: flex; flex-direction: column; gap: 5px; min-height: 94px; padding: 16px 16px 14px 43px; border: 1px solid var(--line); border-radius: 11px; background: #fff; text-align: left; cursor: pointer; }
+.choice-card { position: relative; display: flex; flex-direction: column; gap: 5px; min-height: 84px; padding: 16px 16px 14px 43px; border: 1px solid var(--line); border-radius: 11px; background: #fff; text-align: left; cursor: pointer; }
 .choice-card i { position: absolute; left: 16px; top: 17px; width: 15px; height: 15px; border: 1px solid #c7cbd0; border-radius: 50%; }
 .choice-card strong { font-size: 12px; }
 .choice-card span { color: var(--muted); font-size: 11px; line-height: 1.5; }

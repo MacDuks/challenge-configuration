@@ -49,8 +49,8 @@ const statusLabels: Record<ChallengeStatus, string> = {
 }
 
 const scoringLabels = {
-  sum: 'Сумма результата',
-  average: 'Средний результат',
+  sum: 'Лидерборд по сумме',
+  average: 'Лидерборд по среднему значению',
 } as const
 
 export function App() {
@@ -395,9 +395,8 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
       <div className="create-heading page-content">
         
         <button className="back-link" onClick={onBack}><ChevronLeft size={19} />К челленджам</button>
-        <span className="eyebrow">{isEditing ? 'Редактирование' : 'Новый челлендж'}</span>
         <h1>{isEditing ? 'Редактирование челленджа' : 'Создание челленджа'}</h1>
-        <p>{isEditing ? 'Обновите параметры, механику и оформление челленджа.' : 'Заполните основную информацию и настройте механику челленджа.'}</p>
+        <p>{isEditing ? 'Обновите параметры, механику и оформление челленджа.' : 'Заполните основную информацию и настройте механику челленджа'}</p>
         
       </div>
 
@@ -405,7 +404,6 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
         <div className="form-column">
           {notice && <div className="form-error">{notice}</div>}
           <FormSection 
-            number="01" 
             title="Основная информация" 
             subtitle="Название и описание для участников"
           >
@@ -416,32 +414,32 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
               <textarea maxLength={500} rows={4} value={draft.description} onChange={(e) => set('description', e.target.value)} placeholder="Расскажите о цели и правилах челленджа" />
             </Field>
           </FormSection>
-          <FormSection number="02" title="Даты челленджа" subtitle="Укажите период участия">
+          <FormSection title="Даты челленджа" subtitle="Укажите период участия">
             <div className="field-row">
               <Field label="Дата начала"><input type="date" value={draft.start_date} onChange={(e) => set('start_date', e.target.value)} /></Field>
               <Field label="Дата окончания"><input type="date" min={draft.start_date} value={draft.end_date} onChange={(e) => set('end_date', e.target.value)} /></Field>
             </div>
           </FormSection>
-          <FormSection number="03" title="Доступ к челленджу" subtitle="Определите, кто сможет принять участие">
+          <FormSection title="Доступ к челленджу" subtitle="Определите, кто сможет принять участие">
             <div className="choice-grid">
               <AccessCard
                 icon={Globe2}
                 selected={draft.visibility === 'public'}
                 title="Публичный"
-                text="Челлендж доступен всем пользователям платформы."
+                text="Челлендж доступен всем пользователям платформы"
                 onClick={() => set('visibility', 'public')}
               />
               <AccessCard
                 icon={LockKeyhole}
                 selected={draft.visibility === 'private'}
                 title="Приватный"
-                text="Участвовать смогут сотрудники выбранных компаний."
+                text="Участвовать смогут сотрудники выбранных компаний"
                 onClick={() => set('visibility', 'private')}
               />
             </div>
             {draft.visibility === 'private' && <div className="companies-box">
               <div className="companies-heading">
-                <div><strong>Компании</strong><span>Связываем челлендж с отдельной сущностью company</span></div>
+                <div><strong>Компании</strong><span>Связываем челлендж с компанией</span></div>
                 <button className="button secondary" onClick={() => setCompanyDialogOpen(true)}>Создать компанию</button>
               </div>
               {!!draft.company_ids.length && <div className="selected-companies">
@@ -470,7 +468,7 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
               </div>
             </div>}
           </FormSection>
-          <FormSection number="04" title="Выбор активности" subtitle="Фиксируем activity_type и metric отдельно">
+          <FormSection title="Выбор активности" subtitle="Фиксируем вид активности">
             <div className="activity-grid">
               {(Object.keys(activityLabels) as ActivityKey[]).map((activityKey) => {
                 const Icon = activityIcons[activityKey]
@@ -480,21 +478,21 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
               })}
             </div>
           </FormSection>
-          <FormSection number="05" title="Тип челленджа" subtitle="Выберите challenge_type">
+          <FormSection title="Тип челленджа" subtitle="Выберите тип челленджа">
             <div className="choice-grid">
-              <ChoiceCard selected={draft.challenge_type === 'target'} title="Целевой челлендж" text="Каждый участник стремится выполнить заданную цель." onClick={() => set('challenge_type', 'target')} />
-              <ChoiceCard selected={draft.challenge_type === 'competitive'} title="Соревновательный" text="Участники соревнуются за место в рейтинге." onClick={() => set('challenge_type', 'competitive')} />
+              <ChoiceCard selected={draft.challenge_type === 'target'} title="Целевой челлендж" text="Каждый участник стремится выполнить заданную цель" onClick={() => set('challenge_type', 'target')} />
+              <ChoiceCard selected={draft.challenge_type === 'competitive'} title="Соревновательный" text="Участники соревнуются за место в рейтинге" onClick={() => set('challenge_type', 'competitive')} />
             </div>
             {draft.challenge_type === 'target' && <Field label={`Цель: ${activityLabels[selectedActivity].toLocaleLowerCase()}`}><input type="number" min="1" value={draft.target_value} onChange={(e) => set('target_value', e.target.value)} /></Field>}
           </FormSection>
-          {draft.challenge_type === 'competitive' && <FormSection number="06" title="Формат участия" subtitle="Настройка level и scoring_method">
+          {draft.challenge_type === 'competitive' && <FormSection title="Формат участия" subtitle="Настройка формата участия и подсчёта результатов">
             <div className="choice-grid">
-              <ChoiceCard selected={draft.level === 'overall'} title="Без команд" text="Общий рейтинг для всех участников." onClick={() => set('level', 'overall')} />
-              <ChoiceCard selected={draft.level === 'team'} title="С командами" text="Участники объединяются и соревнуются командами." onClick={() => set('level', 'team')} />
+              <ChoiceCard selected={draft.level === 'overall'} title="Без команд" text="Общий рейтинг для всех участников" onClick={() => set('level', 'overall')} />
+              <ChoiceCard selected={draft.level === 'team'} title="С командами" text="Участники объединяются и соревнуются командами" onClick={() => set('level', 'team')} />
             </div>
             <div className="choice-grid">
-              <ChoiceCard selected={draft.scoring_method === 'sum'} title={scoringLabels.sum} text="Подходит для общего объема результата." onClick={() => set('scoring_method', 'sum')} />
-              <ChoiceCard selected={draft.scoring_method === 'average'} title={scoringLabels.average} text="Подходит для сравнения команд по среднему значению." onClick={() => set('scoring_method', 'average')} />
+              <ChoiceCard selected={draft.scoring_method === 'sum'} title={scoringLabels.sum} text="Подходит для общего объема результата" onClick={() => set('scoring_method', 'sum')} />
+              <ChoiceCard selected={draft.scoring_method === 'average'} title={scoringLabels.average} text="Подходит для сравнения команд по среднему значению" onClick={() => set('scoring_method', 'average')} />
             </div>
             {draft.level === 'team' && <div className="team-formation">
               <h3>Формирование команд</h3>
@@ -521,7 +519,7 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
               </div>}
             </div>}
           </FormSection>}
-          <FormSection number={draft.challenge_type === 'competitive' ? '07' : '06'} title="Оформление" subtitle="Добавьте фирменный стиль челленджа">
+          <FormSection title="Оформление" subtitle="Добавьте фирменный стиль челленджа">
           
             <div className={`upload-grid ${draft.visibility === 'public' ? 'single' : ''}`}>
               {draft.visibility === 'private' && 
