@@ -175,7 +175,7 @@ function ChallengeList({ challenges, onCreate, notice }: { challenges: Challenge
         </div>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Название</th><th>Тип</th><th>Активность</th><th>Участники</th><th>Период</th><th>Статус</th><th /></tr></thead>
+            <thead><tr><th>Название</th><th>Тип</th><th>Активность</th><th>Участники</th><th>Период</th><th>Компания</th><th>Статус</th><th /></tr></thead>
             <tbody>
               {filtered.map((challenge) => {
                 const Icon = activityIcons[challenge.activity]
@@ -185,8 +185,8 @@ function ChallengeList({ challenges, onCreate, notice }: { challenges: Challenge
                   <td>{activityLabels[challenge.activity]}</td>
                   <td><span className="participant-cell"><Users size={15} />{challenge.participants}</span></td>
                   <td>{challenge.period}</td>
+                  <td>Росагролизинг</td>
                   <td><span className={`status-badge ${challenge.status}`}><i />{statusLabels[challenge.status]}</span></td>
-                  <td><button className="more-button"><MoreHorizontal size={19} /></button></td>
                 </tr>
               })}
             </tbody>
