@@ -257,11 +257,7 @@ function ChallengeList({ challenges, onCreate, onEdit, notice }: {
         </div>
         <div className="table-scroll">
           <table>
-<<<<<<< Updated upstream
-            <thead><tr><th>Название</th><th>Тип</th><th>Активность</th><th>Участники</th><th>Период</th><th>Компания</th><th>Статус</th><th /></tr></thead>
-=======
             <thead><tr><th>Название</th><th>Компания</th><th>Тип</th><th>Активность</th><th>Участники</th><th>Период</th><th>Статус</th><th>Действие</th></tr></thead>
->>>>>>> Stashed changes
             <tbody>
               {filtered.map((challenge) => {
                 const Icon = activityIcons[challenge.activity_key]
@@ -273,12 +269,9 @@ function ChallengeList({ challenges, onCreate, onEdit, notice }: {
                   <td>{activityLabels[challenge.activity_key]}</td>
                   <td><span className="participant-cell"><Users size={15} />{challenge.participants}</span></td>
                   <td>{challenge.period}</td>
-                  <td>Росагролизинг</td>
+                  <td>{challenge.company_name ?? '—'}</td>
                   <td><span className={`status-badge ${challenge.status}`}><i />{statusLabels[challenge.status]}</span></td>
-<<<<<<< Updated upstream
-=======
                   <td><button className="row-action" disabled={editingDisabled} onClick={() => onEdit(challenge)}>{editingDisabled ? 'Недоступно' : 'Редактировать'}</button></td>
->>>>>>> Stashed changes
                 </tr>
               })}
             </tbody>
