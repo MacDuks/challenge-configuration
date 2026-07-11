@@ -4,7 +4,6 @@ import {
   Bike,
   Building2,
   Download,
-  ChevronDown,
   ChevronLeft,
   ChevronRight,
   Dumbbell,
@@ -15,7 +14,6 @@ import {
   LogOut,
   LockKeyhole,
   Menu,
-  MoreHorizontal,
   Search,
   Shuffle,
   Trophy,
@@ -24,10 +22,19 @@ import {
   Waves,
   X,
 } from 'lucide-react'
-import { activityLabels, emptyDraft, initialChallenges, initialCompanies } from './data'
-import type { Activity, Challenge, ChallengeDraft, ChallengeStatus, Company, Page } from './types'
+import { PUBLIC_COMPANY_ID, activityCatalog, activityLabels, emptyDraft, initialCompanies } from './data'
+import type {
+  ActivityKey,
+  ChallengeFormState,
+  ChallengeListItem,
+  ChallengeRecord,
+  ChallengeStatus,
+  CompanyRecord,
+  Page,
+  TeamRecord,
+} from './types'
 
-const activityIcons = {
+const activityIcons: Record<ActivityKey, typeof Footprints> = {
   steps: Footprints,
   run: ActivityIcon,
   bike: Bike,
@@ -41,13 +48,20 @@ const statusLabels: Record<ChallengeStatus, string> = {
   completed: 'Завершён',
 }
 
+const scoringLabels = {
+  sum: 'Сумма результата',
+  average: 'Средний результат',
+} as const
+
 export function App() {
   const [page, setPage] = useState<Page>('challenges')
   const [mobileNav, setMobileNav] = useState(false)
-  const [challenges, setChallenges] = useState(initialChallenges)
-  const [companies, setCompanies] = useState(initialCompanies)
-  const [draft, setDraft] = useState<ChallengeDraft>(emptyDraft)
+  const [companies, setCompanies] = useState<CompanyRecord[]>(initialCompanies)
+  const [draft, setDraft] = useState<ChallengeFormState>(emptyDraft)
+  const [editingContext, setEditingContext] = useState<{ challengeId: string; companyId: string } | null>(null)
   const [notice, setNotice] = useState('')
+
+  const listItems = useMemo(() => flattenChallenges(companies), [companies])
 
   function navigate(next: Page) {
     setPage(next)
@@ -55,28 +69,90 @@ export function App() {
     window.scrollTo({ top: 0, behavior: 'smooth' })
   }
 
+  function openCreate() {
+    setEditingContext(null)
+    setDraft(emptyDraft)
+    setNotice('')
+    navigate('create')
+  }
+
+  function openEdit(item: ChallengeListItem) {
+    if (item.status === 'completed') {
+      setNotice('Завершённый челлендж нельзя редактировать')
+      return
+    }
+
+    const sourceCompany = companies.find((company) => company._id === item.company_id)
+    const challenge = sourceCompany?.challenges.find((entry) => entry.id === item.id)
+    if (!sourceCompany || !challenge) return
+
+    setEditingContext({ challengeId: challenge.id, companyId: sourceCompany._id })
+    setDraft({
+      title: challenge.title,
+      description: challenge.description,
+      start_date: challenge.start_date.slice(0, 10),
+      end_date: challenge.end_date.slice(0, 10),
+      challenge_type: challenge.challenge_type,
+      level: challenge.level,
+      scoring_method: challenge.scoring_method,
+      activity_type: challenge.activity_type,
+      metric: challenge.metric,
+      target_value: challenge.target_value,
+      visibility: sourceCompany._id === PUBLIC_COMPANY_ID ? 'public' : 'private',
+      company_ids: sourceCompany._id === PUBLIC_COMPANY_ID ? [] : [sourceCompany._id],
+      ui_team_creation_mode: challenge.ui_team_creation_mode,
+    })
+    setNotice('')
+    navigate('create')
+  }
+
   function saveChallenge(publish: boolean) {
     if (!draft.title.trim()) {
       setNotice('Добавьте название челленджа')
       return
     }
-    if (draft.visibility === 'private' && draft.companyIds.length === 0) {
+    if (draft.visibility === 'private' && draft.company_ids.length === 0) {
       setNotice('Выберите компанию для приватного челленджа')
       return
     }
 
-    const challenge: Challenge = {
-      id: Date.now(),
+    const now = new Date().toISOString()
+    const currentChallenge = editingContext
+      ? companies
+        .find((company) => company._id === editingContext.companyId)
+        ?.challenges.find((challenge) => challenge.id === editingContext.challengeId) ?? null
+      : null
+
+    const nextChallenge: ChallengeRecord = {
+      id: currentChallenge?.id ?? String(Date.now()),
       title: draft.title,
-      type: draft.type,
-      activity: draft.activity,
-      participants: 0,
-      period: `${formatShortDate(draft.startDate)}–${formatShortDate(draft.endDate)}`,
-      status: publish ? 'active' : 'draft',
+      description: draft.description,
+      start_date: `${draft.start_date}T00:00:00.000+00:00`,
+      end_date: `${draft.end_date}T23:59:59.000+00:00`,
+      challenge_type: draft.challenge_type,
+      level: draft.level,
+      scoring_method: draft.scoring_method,
+      activity_type: draft.activity_type,
+      metric: draft.metric,
+      target_value: draft.target_value,
+      photo_id: currentChallenge?.photo_id,
+      teams: buildTeamsForChallenge(currentChallenge, draft, draft.level === 'team'),
+      progress: currentChallenge?.progress ?? [],
+      created_by: currentChallenge?.created_by ?? 'local-admin',
+      created_at: currentChallenge?.created_at ?? now,
+      updated_at: now,
+      ui_status: publish ? 'active' : 'draft',
+      ui_participants: currentChallenge?.ui_participants ?? 0,
+      ui_team_creation_mode: draft.ui_team_creation_mode,
     }
-    setChallenges((items) => [challenge, ...items])
+
+    const targetCompanyId = draft.visibility === 'private' ? draft.company_ids[0] : PUBLIC_COMPANY_ID
+    setCompanies((items) => upsertChallenge(items, targetCompanyId, nextChallenge, editingContext))
+    setEditingContext(null)
     setDraft(emptyDraft)
-    setNotice(publish ? 'Челлендж опубликован' : 'Черновик сохранён')
+    setNotice(currentChallenge
+      ? (publish ? 'Челлендж обновлён и опубликован' : 'Изменения сохранены в черновик')
+      : (publish ? 'Челлендж опубликован' : 'Черновик сохранён'))
     navigate('challenges')
   }
 
@@ -86,11 +162,12 @@ export function App() {
       <div className="app-main">
         <MobileTopbar onMenu={() => setMobileNav(true)} />
         {page === 'challenges' && (
-          <ChallengeList challenges={challenges} onCreate={() => navigate('create')} notice={notice} />
+          <ChallengeList challenges={listItems} onCreate={openCreate} onEdit={openEdit} notice={notice} />
         )}
         {page === 'create' && (
           <ChallengeCreate
             draft={draft}
+            isEditing={editingContext !== null}
             setDraft={setDraft}
             companies={companies}
             setCompanies={setCompanies}
@@ -141,7 +218,12 @@ function MobileTopbar({ onMenu }: { onMenu: () => void }) {
   )
 }
 
-function ChallengeList({ challenges, onCreate, notice }: { challenges: Challenge[]; onCreate: () => void; notice: string }) {
+function ChallengeList({ challenges, onCreate, onEdit, notice }: {
+  challenges: ChallengeListItem[]
+  onCreate: () => void
+  onEdit: (challenge: ChallengeListItem) => void
+  notice: string
+}) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<'all' | ChallengeStatus>('all')
   const [filtersOpen, setFiltersOpen] = useState(false)
@@ -175,18 +257,28 @@ function ChallengeList({ challenges, onCreate, notice }: { challenges: Challenge
         </div>
         <div className="table-scroll">
           <table>
+<<<<<<< Updated upstream
             <thead><tr><th>Название</th><th>Тип</th><th>Активность</th><th>Участники</th><th>Период</th><th>Компания</th><th>Статус</th><th /></tr></thead>
+=======
+            <thead><tr><th>Название</th><th>Компания</th><th>Тип</th><th>Активность</th><th>Участники</th><th>Период</th><th>Статус</th><th>Действие</th></tr></thead>
+>>>>>>> Stashed changes
             <tbody>
               {filtered.map((challenge) => {
-                const Icon = activityIcons[challenge.activity]
+                const Icon = activityIcons[challenge.activity_key]
+                const editingDisabled = challenge.status === 'completed'
                 return <tr key={challenge.id}>
-                  <td><div className="challenge-name"><div className={`activity-thumb ${challenge.activity}`}><Icon size={18} /></div><strong>{challenge.title}</strong></div></td>
-                  <td>{challenge.type === 'target' ? 'Целевой' : 'Соревновательный'}</td>
-                  <td>{activityLabels[challenge.activity]}</td>
+                  <td><div className="challenge-name"><div className={`activity-thumb ${challenge.activity_key}`}><Icon size={18} /></div><strong>{challenge.title}</strong></div></td>
+                  <td>{challenge.company_name ?? '—'}</td>
+                  <td>{challenge.challenge_type === 'target' ? 'Целевой' : 'Соревновательный'}</td>
+                  <td>{activityLabels[challenge.activity_key]}</td>
                   <td><span className="participant-cell"><Users size={15} />{challenge.participants}</span></td>
                   <td>{challenge.period}</td>
                   <td>Росагролизинг</td>
                   <td><span className={`status-badge ${challenge.status}`}><i />{statusLabels[challenge.status]}</span></td>
+<<<<<<< Updated upstream
+=======
+                  <td><button className="row-action" disabled={editingDisabled} onClick={() => onEdit(challenge)}>{editingDisabled ? 'Недоступно' : 'Редактировать'}</button></td>
+>>>>>>> Stashed changes
                 </tr>
               })}
             </tbody>
@@ -199,19 +291,21 @@ function ChallengeList({ challenges, onCreate, notice }: { challenges: Challenge
   )
 }
 
-function ChallengeCreate({ draft, setDraft, companies, setCompanies, onBack, onSave, notice, clearNotice }: {
-  draft: ChallengeDraft
-  setDraft: React.Dispatch<React.SetStateAction<ChallengeDraft>>
-  companies: Company[]
-  setCompanies: React.Dispatch<React.SetStateAction<Company[]>>
+function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, onBack, onSave, notice, clearNotice }: {
+  draft: ChallengeFormState
+  isEditing: boolean
+  setDraft: React.Dispatch<React.SetStateAction<ChallengeFormState>>
+  companies: CompanyRecord[]
+  setCompanies: React.Dispatch<React.SetStateAction<CompanyRecord[]>>
   onBack: () => void
   onSave: (publish: boolean) => void
   notice: string
   clearNotice: () => void
 }) {
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false)
+  const [companyQuery, setCompanyQuery] = useState('')
   const [newCompanyName, setNewCompanyName] = useState('')
-  const [teamCount, setTeamCount] = useState(4)
+  const [teamCountInput, setTeamCountInput] = useState('4')
   const [teamFileName, setTeamFileName] = useState('')
   const [teamsExporting, setTeamsExporting] = useState(false)
   const [teams, setTeams] = useState([
@@ -220,34 +314,51 @@ function ChallengeCreate({ draft, setDraft, companies, setCompanies, onBack, onS
     { name: 'Вектор', code: 'C6P3R7' },
     { name: 'Импульс', code: 'D9T5L1' },
   ])
-  const set = <K extends keyof ChallengeDraft>(key: K, value: ChallengeDraft[K]) => {
+  const set = <K extends keyof ChallengeFormState>(key: K, value: ChallengeFormState[K]) => {
     clearNotice()
     setDraft((current) => ({ ...current, [key]: value }))
   }
 
-  function toggleCompany(companyId: number) {
-    set('companyIds', draft.companyIds.includes(companyId)
-      ? draft.companyIds.filter((id) => id !== companyId)
-      : [...draft.companyIds, companyId])
+  const privateCompanies = companies.filter((company) => company._id !== PUBLIC_COMPANY_ID)
+  const selectedActivity = getActivityKey(draft.activity_type, draft.metric)
+  const visibleCompanies = privateCompanies.filter((company) =>
+    company.name.toLocaleLowerCase().includes(companyQuery.toLocaleLowerCase()),
+  )
+
+  function toggleCompany(companyId: string) {
+    set('company_ids', draft.company_ids.includes(companyId)
+      ? draft.company_ids.filter((id) => id !== companyId)
+      : [...draft.company_ids, companyId])
+  }
+
+  function chooseActivity(activityKey: ActivityKey) {
+    const config = activityCatalog[activityKey]
+    setDraft((current) => ({
+      ...current,
+      activity_type: config.activity_type,
+      metric: config.metric,
+    }))
+    clearNotice()
   }
 
   function createCompany() {
     const name = newCompanyName.trim()
     if (!name) return
-    const company = { id: Date.now(), name }
+    const company: CompanyRecord = { _id: String(Date.now()), name, members: [], challenges: [] }
     setCompanies((items) => [...items, company])
-    set('companyIds', [...draft.companyIds, company.id])
+    set('company_ids', [...draft.company_ids, company._id])
     setNewCompanyName('')
+    setCompanyQuery('')
     setCompanyDialogOpen(false)
   }
 
   function generateTeams() {
-    const names = ['Молния', 'Альфа', 'Вектор', 'Импульс', 'Орбита', 'Комета', 'Пульс', 'Форсаж']
-    const count = Math.max(2, Math.min(8, teamCount))
-    setTeamCount(count)
-    setTeams(names.slice(0, count).map((name, index) => ({
-      name,
-      code: `${String.fromCharCode(65 + index)}${7 + index}K${2 + index}M${9 - index}`,
+    const parsed = Number(teamCountInput)
+    const count = Number.isFinite(parsed) ? Math.max(2, Math.min(100, parsed)) : 2
+    setTeamCountInput(String(count))
+    setTeams(new Array(count).fill(null).map((_, index) => ({
+      name: buildTeamName(index),
+      code: buildTeamCode(index),
     })))
   }
 
@@ -290,9 +401,9 @@ function ChallengeCreate({ draft, setDraft, companies, setCompanies, onBack, onS
     <main className="create-page">
       <div className="create-heading page-content">
         <button className="back-link" onClick={onBack}><ChevronLeft size={19} />К челленджам</button>
-        <span className="eyebrow">Новый челлендж</span>
-        <h1>Создание челленджа</h1>
-        <p>Заполните основную информацию и настройте механику челленджа.</p>
+        <span className="eyebrow">{isEditing ? 'Редактирование' : 'Новый челлендж'}</span>
+        <h1>{isEditing ? 'Редактирование челленджа' : 'Создание челленджа'}</h1>
+        <p>{isEditing ? 'Обновите параметры, механику и оформление челленджа.' : 'Заполните основную информацию и настройте механику челленджа.'}</p>
       </div>
       <div className="builder-layout page-content">
         <div className="form-column">
@@ -307,8 +418,8 @@ function ChallengeCreate({ draft, setDraft, companies, setCompanies, onBack, onS
           </FormSection>
           <FormSection number="02" title="Даты челленджа" subtitle="Укажите период участия">
             <div className="field-row">
-              <Field label="Дата начала"><input type="date" value={draft.startDate} onChange={(e) => set('startDate', e.target.value)} /></Field>
-              <Field label="Дата окончания"><input type="date" min={draft.startDate} value={draft.endDate} onChange={(e) => set('endDate', e.target.value)} /></Field>
+              <Field label="Дата начала"><input type="date" value={draft.start_date} onChange={(e) => set('start_date', e.target.value)} /></Field>
+              <Field label="Дата окончания"><input type="date" min={draft.start_date} value={draft.end_date} onChange={(e) => set('end_date', e.target.value)} /></Field>
             </div>
           </FormSection>
           <FormSection number="03" title="Доступ к челленджу" subtitle="Определите, кто сможет принять участие">
@@ -330,54 +441,69 @@ function ChallengeCreate({ draft, setDraft, companies, setCompanies, onBack, onS
             </div>
             {draft.visibility === 'private' && <div className="companies-box">
               <div className="companies-heading">
-                <div><strong>Компании</strong><span>Выберите одну или несколько компаний</span></div>
+                <div><strong>Компании</strong><span>Связываем челлендж с отдельной сущностью company</span></div>
                 <button className="button secondary" onClick={() => setCompanyDialogOpen(true)}>Создать компанию</button>
               </div>
-              <div className="company-options">
-                {companies.map((company) => {
-                  const selected = draft.companyIds.includes(company.id)
-                  return <div className={`company-option ${selected ? 'selected' : ''}`} key={company.id}>
-                    <label className="company-option-main">
-                      <input type="checkbox" checked={selected} onChange={() => toggleCompany(company.id)} />
-                      <span className="company-option-icon"><Building2 size={15} /></span>
-                      <strong>{company.name}</strong>
-                    </label>
-                    {selected && <button className="company-remove" onClick={() => toggleCompany(company.id)} aria-label={`Убрать ${company.name} из выборки`} title="Убрать из выборки"><X size={15} /></button>}
+              {!!draft.company_ids.length && <div className="selected-companies">
+                {privateCompanies.filter((company) => draft.company_ids.includes(company._id)).map((company) => (
+                  <div className="selected-company-chip" key={company._id}>
+                    <span className="company-option-icon"><Building2 size={15} /></span>
+                    <strong>{company.name}</strong>
+                    <button className="company-remove" onClick={() => toggleCompany(company._id)} aria-label={`Убрать ${company.name} из выборки`} title="Убрать из выборки"><X size={15} /></button>
                   </div>
+                ))}
+              </div>}
+              <label className="company-search">
+                <Search size={16} />
+                <input value={companyQuery} onChange={(event) => setCompanyQuery(event.target.value)} placeholder="Найти компанию" />
+              </label>
+              <div className="company-results">
+                {visibleCompanies.map((company) => {
+                  const selected = draft.company_ids.includes(company._id)
+                  return <button className={`company-result ${selected ? 'selected' : ''}`} key={company._id} onClick={() => toggleCompany(company._id)}>
+                    <span className="company-option-icon"><Building2 size={15} /></span>
+                    <strong>{company.name}</strong>
+                    <i>{selected ? 'Добавлена' : 'Выбрать'}</i>
+                  </button>
                 })}
+                {!visibleCompanies.length && <div className="company-empty">Компании не найдены</div>}
               </div>
             </div>}
           </FormSection>
-          <FormSection number="04" title="Выбор активности" subtitle="Что будут делать участники">
+          <FormSection number="04" title="Выбор активности" subtitle="Фиксируем activity_type и metric отдельно">
             <div className="activity-grid">
-              {(Object.keys(activityLabels) as Activity[]).map((activity) => {
-                const Icon = activityIcons[activity]
-                return <button key={activity} className={`select-card ${draft.activity === activity ? 'selected' : ''}`} onClick={() => set('activity', activity)}>
-                  <Icon size={23} /><span>{activityLabels[activity]}</span><i />
+              {(Object.keys(activityLabels) as ActivityKey[]).map((activityKey) => {
+                const Icon = activityIcons[activityKey]
+                return <button key={activityKey} className={`select-card ${selectedActivity === activityKey ? 'selected' : ''}`} onClick={() => chooseActivity(activityKey)}>
+                  <Icon size={23} /><span>{activityLabels[activityKey]}</span><i />
                 </button>
               })}
             </div>
           </FormSection>
-          <FormSection number="05" title="Тип челленджа" subtitle="Выберите принцип определения результата">
+          <FormSection number="05" title="Тип челленджа" subtitle="Выберите challenge_type">
             <div className="choice-grid">
-              <ChoiceCard selected={draft.type === 'target'} title="Целевой челлендж" text="Каждый участник стремится выполнить заданную цель." onClick={() => set('type', 'target')} />
-              <ChoiceCard selected={draft.type === 'competitive'} title="Соревновательный" text="Участники соревнуются за место в рейтинге." onClick={() => set('type', 'competitive')} />
+              <ChoiceCard selected={draft.challenge_type === 'target'} title="Целевой челлендж" text="Каждый участник стремится выполнить заданную цель." onClick={() => set('challenge_type', 'target')} />
+              <ChoiceCard selected={draft.challenge_type === 'competitive'} title="Соревновательный" text="Участники соревнуются за место в рейтинге." onClick={() => set('challenge_type', 'competitive')} />
             </div>
-            {draft.type === 'target' && <Field label={`Цель: ${activityLabels[draft.activity].toLocaleLowerCase()}`}><input type="number" min="1" value={draft.target} onChange={(e) => set('target', e.target.value)} /></Field>}
+            {draft.challenge_type === 'target' && <Field label={`Цель: ${activityLabels[selectedActivity].toLocaleLowerCase()}`}><input type="number" min="1" value={draft.target_value} onChange={(e) => set('target_value', e.target.value)} /></Field>}
           </FormSection>
-          {draft.type === 'competitive' && <FormSection number="06" title="Формат участия" subtitle="Индивидуальный или командный рейтинг">
+          {draft.challenge_type === 'competitive' && <FormSection number="06" title="Формат участия" subtitle="Настройка level и scoring_method">
             <div className="choice-grid">
-              <ChoiceCard selected={draft.teamMode === 'solo'} title="Без команд" text="Общий рейтинг для всех участников." onClick={() => set('teamMode', 'solo')} />
-              <ChoiceCard selected={draft.teamMode === 'teams'} title="С командами" text="Участники объединяются и соревнуются командами." onClick={() => set('teamMode', 'teams')} />
+              <ChoiceCard selected={draft.level === 'overall'} title="Без команд" text="Общий рейтинг для всех участников." onClick={() => set('level', 'overall')} />
+              <ChoiceCard selected={draft.level === 'team'} title="С командами" text="Участники объединяются и соревнуются командами." onClick={() => set('level', 'team')} />
             </div>
-            {draft.teamMode === 'teams' && <div className="team-formation">
+            <div className="choice-grid">
+              <ChoiceCard selected={draft.scoring_method === 'sum'} title={scoringLabels.sum} text="Подходит для общего объема результата." onClick={() => set('scoring_method', 'sum')} />
+              <ChoiceCard selected={draft.scoring_method === 'average'} title={scoringLabels.average} text="Подходит для сравнения команд по среднему значению." onClick={() => set('scoring_method', 'average')} />
+            </div>
+            {draft.level === 'team' && <div className="team-formation">
               <h3>Формирование команд</h3>
               <div className="team-mode-list">
-                <button className={draft.teamCreation === 'random' ? 'selected' : ''} onClick={() => set('teamCreation', 'random')}><i /><span>Сгенерировать случайно</span></button>
-                <button className={draft.teamCreation === 'manual' ? 'selected' : ''} onClick={() => set('teamCreation', 'manual')}><i /><span>Загрузить самостоятельно</span></button>
+                <button className={draft.ui_team_creation_mode === 'random' ? 'selected' : ''} onClick={() => set('ui_team_creation_mode', 'random')}><i /><span>Сгенерировать случайно</span></button>
+                <button className={draft.ui_team_creation_mode === 'manual' ? 'selected' : ''} onClick={() => set('ui_team_creation_mode', 'manual')}><i /><span>Загрузить самостоятельно</span></button>
               </div>
-              {draft.teamCreation === 'random' ? <div className="team-generator">
-                <div className="team-count-field"><Field label="Количество команд"><input type="number" min="2" max="8" value={teamCount} onChange={(event) => setTeamCount(Number(event.target.value))} /></Field></div>
+              {draft.ui_team_creation_mode === 'random' ? <div className="team-generator">
+                <div className="team-count-field"><Field label="Количество команд"><input type="number" min="2" max="100" value={teamCountInput} onChange={(event) => setTeamCountInput(event.target.value)} /></Field></div>
                 <button className="generate-teams-button" onClick={generateTeams}><Shuffle size={17} />Сгенерировать</button>
                 <TeamTable teams={teams} onExport={exportTeamsExcel} exporting={teamsExporting} />
               </div> : <div className="team-importer">
@@ -395,7 +521,7 @@ function ChallengeCreate({ draft, setDraft, companies, setCompanies, onBack, onS
               </div>}
             </div>}
           </FormSection>}
-          <FormSection number={draft.type === 'competitive' ? '07' : '06'} title="Оформление" subtitle="Добавьте фирменный стиль челленджа">
+          <FormSection number={draft.challenge_type === 'competitive' ? '07' : '06'} title="Оформление" subtitle="Добавьте фирменный стиль челленджа">
             <div className={`upload-grid ${draft.visibility === 'public' ? 'single' : ''}`}>
               {draft.visibility === 'private' && <UploadBox label="Логотип челленджа" note="PNG или SVG, до 5 МБ" />}
               <UploadBox label="Основная обложка" note="PNG или JPG, 1200×640" />
@@ -403,7 +529,7 @@ function ChallengeCreate({ draft, setDraft, companies, setCompanies, onBack, onS
           </FormSection>
         </div>
       </div>
-      <div className="sticky-actions"><button className="button secondary" onClick={onBack}>Отмена</button><div><button className="button ghost" onClick={() => onSave(false)}>Сохранить черновик</button><button className="button primary" onClick={() => onSave(true)}>Опубликовать</button></div></div>
+      <div className="sticky-actions"><button className="button secondary" onClick={onBack}>Отмена</button><div><button className="button ghost" onClick={() => onSave(false)}>{isEditing ? 'Сохранить изменения' : 'Сохранить черновик'}</button><button className="button primary" onClick={() => onSave(true)}>{isEditing ? 'Обновить челлендж' : 'Опубликовать'}</button></div></div>
       {companyDialogOpen && <div className="modal-backdrop" onMouseDown={() => setCompanyDialogOpen(false)}>
         <section className="company-dialog" role="dialog" aria-modal="true" aria-labelledby="company-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="dialog-heading">
@@ -444,6 +570,71 @@ function TeamTable({ teams, onExport, exporting }: { teams: { name: string; code
 function UploadBox({ label, note }: { label: string; note: string }) {
   const [fileName, setFileName] = useState('')
   return <label className={`upload-box ${fileName ? 'has-file' : ''}`}><input type="file" accept="image/*" onChange={(e) => setFileName(e.target.files?.[0]?.name ?? '')} /><div><Upload size={21} /></div><strong>{fileName || label}</strong><span>{fileName ? 'Нажмите, чтобы заменить файл' : note}</span></label>
+}
+
+function getActivityKey(activityType: ChallengeFormState['activity_type'], metric: ChallengeFormState['metric']): ActivityKey {
+  if (activityType === 'walking' && metric === 'steps') return 'steps'
+  if (activityType === 'running') return 'run'
+  if (activityType === 'cycling') return 'bike'
+  if (activityType === 'swimming') return 'swim'
+  return 'moves'
+}
+
+function flattenChallenges(companies: CompanyRecord[]): ChallengeListItem[] {
+  return companies.flatMap((company) => company.challenges.map((challenge) => ({
+    id: challenge.id,
+    company_id: company._id,
+    company_name: company._id === PUBLIC_COMPANY_ID ? undefined : company.name,
+    title: challenge.title,
+    challenge_type: challenge.challenge_type,
+    activity_key: getActivityKey(challenge.activity_type, challenge.metric),
+    participants: challenge.ui_participants,
+    period: `${formatShortDate(challenge.start_date)}–${formatShortDate(challenge.end_date)}`,
+    status: challenge.ui_status,
+  })))
+}
+
+function buildTeamsForChallenge(currentChallenge: ChallengeRecord | null, draft: ChallengeFormState, shouldUseTeams: boolean): TeamRecord[] {
+  if (!shouldUseTeams) return []
+  return currentChallenge?.teams ?? []
+}
+
+function buildTeamName(index: number) {
+  const presets = ['Молния', 'Альфа', 'Вектор', 'Импульс', 'Орбита', 'Комета', 'Пульс', 'Форсаж']
+  if (index < presets.length) return presets[index]
+  return `Команда ${index + 1}`
+}
+
+function buildTeamCode(index: number) {
+  const letters = 'ABCDEFGHJKLMNPQRSTUVWXYZ'
+  const first = letters[index % letters.length]
+  const second = letters[Math.floor(index / letters.length) % letters.length]
+  const numeric = String(index + 1).padStart(2, '0')
+  return `${first}${numeric}${second}${9 - (index % 9)}K`
+}
+
+function upsertChallenge(
+  companies: CompanyRecord[],
+  targetCompanyId: string,
+  nextChallenge: ChallengeRecord,
+  editingContext: { challengeId: string; companyId: string } | null,
+) {
+  return companies.map((company) => {
+    const withoutCurrent = editingContext
+      ? company.challenges.filter((challenge) => challenge.id !== editingContext.challengeId)
+      : company.challenges
+
+    if (company._id !== targetCompanyId) {
+      return { ...company, challenges: withoutCurrent }
+    }
+
+    const existingIndex = withoutCurrent.findIndex((challenge) => challenge.id === nextChallenge.id)
+    const challenges = existingIndex >= 0
+      ? withoutCurrent.map((challenge) => challenge.id === nextChallenge.id ? nextChallenge : challenge)
+      : [nextChallenge, ...withoutCurrent]
+
+    return { ...company, challenges }
+  })
 }
 
 function formatShortDate(value: string) {
