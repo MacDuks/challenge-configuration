@@ -1,9 +1,10 @@
-import { useMemo, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import {
   Activity as ActivityIcon,
   Bike,
   Building2,
   Download,
+  Pencil,
   ChevronLeft,
   ChevronRight,
   Dumbbell,
@@ -18,11 +19,11 @@ import {
   Shuffle,
   Trophy,
   Upload,
-  Users,
   Waves,
   X,
 } from 'lucide-react'
 import { PUBLIC_COMPANY_ID, activityCatalog, activityLabels, emptyDraft, initialCompanies } from './data'
+import { createChallenge, createCompany as createCompanyApi, exportAnalyticsCsv, exportInviteCodesCsv, isEveryApiConfigured, uploadFile } from './lib/everyApi'
 import type {
   ActivityKey,
   ChallengeFormState,
@@ -30,6 +31,7 @@ import type {
   ChallengeRecord,
   ChallengeStatus,
   CompanyRecord,
+  CreateChallengePayload,
   Page,
   TeamRecord,
 } from './types'
@@ -53,15 +55,26 @@ const scoringLabels = {
   average: 'Лидерборд по среднему значению',
 } as const
 
+const STORAGE_KEY = 'everyfit.challenge.configuration.state'
+
+type DraftSaveContext = {
+  coverFile: File | null
+  teams: { name: string; code: string }[]
+}
+
 export function App() {
   const [page, setPage] = useState<Page>('challenges')
   const [mobileNav, setMobileNav] = useState(false)
-  const [companies, setCompanies] = useState<CompanyRecord[]>(initialCompanies)
+  const [companies, setCompanies] = useState<CompanyRecord[]>(() => loadCompaniesState())
   const [draft, setDraft] = useState<ChallengeFormState>(emptyDraft)
   const [editingContext, setEditingContext] = useState<{ challengeId: string; companyId: string } | null>(null)
   const [notice, setNotice] = useState('')
 
   const listItems = useMemo(() => flattenChallenges(companies), [companies])
+
+  useEffect(() => {
+    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(companies))
+  }, [companies])
 
   function navigate(next: Page) {
     setPage(next)
@@ -106,13 +119,17 @@ export function App() {
     navigate('create')
   }
 
-  function saveChallenge(publish: boolean) {
+  async function saveChallenge(publish: boolean, context: DraftSaveContext) {
     if (!draft.title.trim()) {
       setNotice('Добавьте название челленджа')
       return
     }
     if (draft.visibility === 'private' && draft.company_ids.length === 0) {
       setNotice('Выберите компанию для приватного челленджа')
+      return
+    }
+    if (publish && draft.visibility === 'public' && !editingContext) {
+      setNotice('По текущим ручкам API можно создать только приватный челлендж внутри компании')
       return
     }
 
@@ -122,6 +139,88 @@ export function App() {
         .find((company) => company._id === editingContext.companyId)
         ?.challenges.find((challenge) => challenge.id === editingContext.challengeId) ?? null
       : null
+
+    const targetCompanyId = draft.visibility === 'private' ? draft.company_ids[0] : PUBLIC_COMPANY_ID
+
+    try {
+      if (publish && draft.visibility === 'private' && !editingContext && isEveryApiConfigured()) {
+        const photoId = context.coverFile ? (await uploadFile(context.coverFile)).id : undefined
+        const teamNames = draft.level === 'team'
+          ? context.teams.map((team) => ({ name: team.name }))
+          : [{ name: companies.find((company) => company._id === targetCompanyId)?.name || draft.title }]
+
+        const payload: CreateChallengePayload = {
+          title: draft.title.trim(),
+          description: draft.description.trim(),
+          start_date: `${draft.start_date}T00:00:00Z`,
+          end_date: `${draft.end_date}T23:59:59Z`,
+          challenge_type: draft.challenge_type,
+          level: draft.level,
+          scoring_method: draft.scoring_method,
+          activity_type: draft.activity_type,
+          metric: draft.metric,
+          teams: teamNames,
+          ...(draft.challenge_type === 'goal_based' && draft.target_value ? { target_value: Number(draft.target_value) } : {}),
+          ...(photoId ? { photo_id: photoId } : {}),
+        }
+
+        const response = await createChallenge(targetCompanyId, payload)
+        let inviteCode: string | undefined
+        let participantsCount = 0
+        try {
+          inviteCode = parseInviteCodeCsv(await exportInviteCodesCsv(targetCompanyId, response.id))
+        } catch {
+          inviteCode = undefined
+        }
+        try {
+          participantsCount = parseParticipantsCountCsv(await exportAnalyticsCsv(targetCompanyId, response.id))
+        } catch {
+          participantsCount = 0
+        }
+        const nextChallenge: ChallengeRecord = {
+          id: response.id,
+          title: response.title,
+          description: response.description,
+          start_date: response.start_date,
+          end_date: response.end_date,
+          challenge_type: response.challenge_type,
+          level: response.level,
+          scoring_method: response.scoring_method,
+          activity_type: response.activity_type,
+          metric: response.metric,
+          target_value: String(response.target_value ?? draft.target_value ?? ''),
+          photo_id: response.photo_id,
+          teams: context.teams.map((team, index) => ({
+            id: `${response.id}-${index + 1}`,
+            challenge_id: response.id,
+            name: team.name,
+            members: [],
+            invite_codes: index === 0 && inviteCode ? [{
+              code: inviteCode,
+              created_at: response.created_at ?? now,
+              expires_at: response.end_date,
+            }] : [],
+          })),
+          progress: [],
+          created_by: response.created_by ?? 'api-admin',
+          created_at: response.created_at ?? now,
+          updated_at: response.updated_at ?? now,
+          ui_status: 'active',
+          ui_participants: participantsCount,
+          ui_team_creation_mode: draft.ui_team_creation_mode,
+        }
+
+        setCompanies((items) => upsertChallenge(items, targetCompanyId, nextChallenge, editingContext))
+        setEditingContext(null)
+        setDraft(emptyDraft)
+        setNotice('Челлендж создан в EveryFit API')
+        navigate('challenges')
+        return
+      }
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Не удалось создать челлендж через API')
+      return
+    }
 
     const nextChallenge: ChallengeRecord = {
       id: currentChallenge?.id ?? String(Date.now()),
@@ -136,7 +235,7 @@ export function App() {
       metric: draft.metric,
       target_value: draft.target_value,
       photo_id: currentChallenge?.photo_id,
-      teams: buildTeamsForChallenge(currentChallenge, draft, draft.level === 'team'),
+      teams: buildTeamsForChallenge(currentChallenge, context.teams, draft.level === 'team'),
       progress: currentChallenge?.progress ?? [],
       created_by: currentChallenge?.created_by ?? 'local-admin',
       created_at: currentChallenge?.created_at ?? now,
@@ -146,7 +245,6 @@ export function App() {
       ui_team_creation_mode: draft.ui_team_creation_mode,
     }
 
-    const targetCompanyId = draft.visibility === 'private' ? draft.company_ids[0] : PUBLIC_COMPANY_ID
     setCompanies((items) => upsertChallenge(items, targetCompanyId, nextChallenge, editingContext))
     setEditingContext(null)
     setDraft(emptyDraft)
@@ -156,13 +254,81 @@ export function App() {
     navigate('challenges')
   }
 
+  async function loadInviteCode(challenge: ChallengeListItem) {
+    if (!challenge.company_id || challenge.company_id === PUBLIC_COMPANY_ID) {
+      setNotice('Для публичного челленджа инвайт-код недоступен')
+      return
+    }
+
+    try {
+      const inviteCode = parseInviteCodeCsv(await exportInviteCodesCsv(challenge.company_id, challenge.id))
+      if (!inviteCode) {
+        setNotice('Инвайт-код не найден в export invite codes')
+        return
+      }
+
+      setCompanies((items) => setInviteCodeForChallenge(items, challenge.company_id!, challenge.id, inviteCode))
+      setNotice(`Инвайт-код загружен: ${inviteCode}`)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Не удалось получить инвайт-код')
+    }
+  }
+
+  async function exportReport(challenge: ChallengeListItem) {
+    if (!challenge.company_id || challenge.company_id === PUBLIC_COMPANY_ID) {
+      setNotice('Для публичного челленджа отчет недоступен')
+      return
+    }
+
+    try {
+      const csv = await exportAnalyticsCsv(challenge.company_id, challenge.id)
+      const ExcelJS = await import('exceljs')
+      const workbook = new ExcelJS.Workbook()
+      const worksheet = workbook.addWorksheet('Отчет')
+      const rows = parseSemicolonCsv(csv)
+
+      rows.forEach((row) => worksheet.addRow(row))
+      worksheet.columns = buildWorksheetColumns(rows)
+
+      worksheet.eachRow((row, rowNumber) => {
+        const values = Array.isArray(row.values) ? row.values : [row.values]
+        if (rowNumber === 1 || values.some((value) => value === 'Позиция')) {
+          row.font = { bold: true, color: { argb: 'FFFFFFFF' } }
+          row.fill = { type: 'pattern', pattern: 'solid', fgColor: { argb: 'FFFF5A1F' } }
+        }
+        row.alignment = { vertical: 'middle', wrapText: true }
+      })
+
+      worksheet.views = [{ state: 'frozen', ySplit: 1 }]
+      const buffer = await workbook.xlsx.writeBuffer()
+      const blob = new Blob([buffer as BlobPart], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' })
+      const url = URL.createObjectURL(blob)
+      const link = document.createElement('a')
+      link.href = url
+      link.download = `${challenge.title.replace(/[^a-zA-Zа-яА-Я0-9_-]+/g, '-') || 'challenge'}-analytics.xlsx`
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Не удалось выгрузить отчет')
+    }
+  }
+
   return (
     <div className="app-shell">
       <Sidebar page={page} navigate={navigate} open={mobileNav} onClose={() => setMobileNav(false)} />
       <div className="app-main">
         <MobileTopbar onMenu={() => setMobileNav(true)} />
         {page === 'challenges' && (
-          <ChallengeList challenges={listItems} onCreate={openCreate} onEdit={openEdit} notice={notice} />
+          <ChallengeList
+            challenges={listItems}
+            onCreate={openCreate}
+            onEdit={openEdit}
+            onLoadInviteCode={loadInviteCode}
+            onExportReport={exportReport}
+            notice={notice}
+          />
         )}
         {page === 'create' && (
           <ChallengeCreate
@@ -174,6 +340,7 @@ export function App() {
             onBack={() => navigate('challenges')}
             onSave={saveChallenge}
             notice={notice}
+            setNotice={setNotice}
             clearNotice={() => setNotice('')}
           />
         )}
@@ -218,15 +385,18 @@ function MobileTopbar({ onMenu }: { onMenu: () => void }) {
   )
 }
 
-function ChallengeList({ challenges, onCreate, onEdit, notice }: {
+function ChallengeList({ challenges, onCreate, onEdit, onLoadInviteCode, onExportReport, notice }: {
   challenges: ChallengeListItem[]
   onCreate: () => void
   onEdit: (challenge: ChallengeListItem) => void
+  onLoadInviteCode: (challenge: ChallengeListItem) => Promise<void>
+  onExportReport: (challenge: ChallengeListItem) => Promise<void>
   notice: string
 }) {
   const [query, setQuery] = useState('')
   const [status, setStatus] = useState<'all' | ChallengeStatus>('all')
   const [filtersOpen, setFiltersOpen] = useState(false)
+  const [loadingInviteId, setLoadingInviteId] = useState<string | null>(null)
 
   const filtered = useMemo(() => challenges.filter((challenge) => {
     const matchesQuery = challenge.title.toLocaleLowerCase().includes(query.toLocaleLowerCase())
@@ -257,20 +427,64 @@ function ChallengeList({ challenges, onCreate, onEdit, notice }: {
         </div>
         <div className="table-scroll">
           <table>
-            <thead><tr><th>Название</th><th>Компания</th><th>Тип</th><th>Активность</th><th>Участники</th><th>Период</th><th>Статус</th><th>Действие</th></tr></thead>
+            <thead><tr><th>Название</th><th>Компания</th><th>Инвайт-код</th><th>Тип</th><th>Активность</th><th>Период</th><th>Статус</th><th>Действие</th></tr></thead>
             <tbody>
               {filtered.map((challenge) => {
-                const Icon = activityIcons[challenge.activity_key]
                 const editingDisabled = challenge.status === 'completed'
                 return <tr key={challenge.id}>
-                  <td><div className="challenge-name"><div className={`activity-thumb ${challenge.activity_key}`}><Icon size={18} /></div><strong>{challenge.title}</strong></div></td>
-                  <td>{challenge.company_name ?? '—'}</td>
-                  <td>{challenge.challenge_type === 'target' ? 'Целевой' : 'Соревновательный'}</td>
+                  <td>
+                    <div className="challenge-name">
+                      {challenge.company_logo_url ? <img className="company-logo challenge-company-logo" src={challenge.company_logo_url} alt={challenge.company_name ?? 'Компания'} /> : <div className="company-logo company-logo-fallback challenge-company-logo">{(challenge.company_name ?? '—').slice(0, 1)}</div>}
+                      <strong>{challenge.title}</strong>
+                    </div>
+                  </td>
+                  <td>
+                    <div className="company-cell">
+                      <span>{challenge.company_name ?? '—'}</span>
+                    </div>
+                  </td>
+                  <td>
+                    {challenge.invite_code ? (
+                      <code className="invite-code">{challenge.invite_code}</code>
+                    ) : challenge.company_id && challenge.company_id !== PUBLIC_COMPANY_ID ? (
+                      <button
+                        className="row-action"
+                        disabled={loadingInviteId === challenge.id}
+                        onClick={async () => {
+                          setLoadingInviteId(challenge.id)
+                          await onLoadInviteCode(challenge)
+                          setLoadingInviteId(null)
+                        }}
+                      >
+                        {loadingInviteId === challenge.id ? 'Загрузка...' : 'Получить'}
+                      </button>
+                    ) : '—'}
+                  </td>
+                  <td>{challenge.challenge_type === 'goal_based' ? 'Целевой' : 'Соревновательный'}</td>
                   <td>{activityLabels[challenge.activity_key]}</td>
-                  <td><span className="participant-cell"><Users size={15} />{challenge.participants}</span></td>
                   <td>{challenge.period}</td>
                   <td><span className={`status-badge ${challenge.status}`}><i />{statusLabels[challenge.status]}</span></td>
-                  <td><button className="row-action" disabled={editingDisabled} onClick={() => onEdit(challenge)}>{editingDisabled ? 'Недоступно' : 'Редактировать'}</button></td>
+                  <td>
+                    <div className="row-actions">
+                      <button
+                        className="row-icon-button muted"
+                        onClick={() => onExportReport(challenge)}
+                        title="Выгрузить отчет Excel"
+                        aria-label="Выгрузить отчет Excel"
+                      >
+                        <Download size={15} />
+                      </button>
+                      <button
+                        className="row-icon-button"
+                        disabled={editingDisabled}
+                        onClick={() => onEdit(challenge)}
+                        title={editingDisabled ? 'Редактирование недоступно' : 'Редактировать челлендж'}
+                        aria-label={editingDisabled ? 'Редактирование недоступно' : 'Редактировать челлендж'}
+                      >
+                        <Pencil size={15} />
+                      </button>
+                    </div>
+                  </td>
                 </tr>
               })}
             </tbody>
@@ -283,20 +497,25 @@ function ChallengeList({ challenges, onCreate, onEdit, notice }: {
   )
 }
 
-function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, onBack, onSave, notice, clearNotice }: {
+function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, onBack, onSave, notice, setNotice, clearNotice }: {
   draft: ChallengeFormState
   isEditing: boolean
   setDraft: React.Dispatch<React.SetStateAction<ChallengeFormState>>
   companies: CompanyRecord[]
   setCompanies: React.Dispatch<React.SetStateAction<CompanyRecord[]>>
   onBack: () => void
-  onSave: (publish: boolean) => void
+  onSave: (publish: boolean, context: DraftSaveContext) => Promise<void>
   notice: string
+  setNotice: React.Dispatch<React.SetStateAction<string>>
   clearNotice: () => void
 }) {
   const [companyDialogOpen, setCompanyDialogOpen] = useState(false)
   const [companyQuery, setCompanyQuery] = useState('')
   const [newCompanyName, setNewCompanyName] = useState('')
+  const [companyLogoFile, setCompanyLogoFile] = useState<File | null>(null)
+  const [coverFile, setCoverFile] = useState<File | null>(null)
+  const [submitting, setSubmitting] = useState(false)
+  const [creatingCompany, setCreatingCompany] = useState(false)
   const [teamCountInput, setTeamCountInput] = useState('4')
   const [teamFileName, setTeamFileName] = useState('')
   const [teamsExporting, setTeamsExporting] = useState(false)
@@ -333,15 +552,48 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
     clearNotice()
   }
 
-  function createCompany() {
+  async function createCompany() {
     const name = newCompanyName.trim()
     if (!name) return
-    const company: CompanyRecord = { _id: String(Date.now()), name, members: [], challenges: [] }
-    setCompanies((items) => [...items, company])
-    set('company_ids', [...draft.company_ids, company._id])
-    setNewCompanyName('')
-    setCompanyQuery('')
-    setCompanyDialogOpen(false)
+
+    try {
+      setCreatingCompany(true)
+
+      if (isEveryApiConfigured()) {
+        if (!companyLogoFile) {
+          setNotice('Для создания компании в API нужно загрузить логотип')
+          return
+        }
+
+        const uploadedLogo = await uploadFile(companyLogoFile)
+        const created = await createCompanyApi({ name, logo_id: uploadedLogo.id })
+        const company: CompanyRecord = {
+          _id: created.id,
+          name: created.name,
+          logo_id: uploadedLogo.id,
+          logo_url: created.logo_url,
+          members: [],
+          challenges: [],
+          created_at: created.created_at,
+        }
+        setCompanies((items) => [...items, company])
+        set('company_ids', [...draft.company_ids, company._id])
+        setNotice('Компания создана в EveryFit API')
+      } else {
+        const company: CompanyRecord = { _id: String(Date.now()), name, members: [], challenges: [] }
+        setCompanies((items) => [...items, company])
+        set('company_ids', [...draft.company_ids, company._id])
+      }
+
+      setNewCompanyName('')
+      setCompanyLogoFile(null)
+      setCompanyQuery('')
+      setCompanyDialogOpen(false)
+    } catch (error) {
+      setNotice(error instanceof Error ? error.message : 'Не удалось создать компанию')
+    } finally {
+      setCreatingCompany(false)
+    }
   }
 
   function generateTeams() {
@@ -437,6 +689,9 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
                 onClick={() => set('visibility', 'private')}
               />
             </div>
+            {draft.visibility === 'public' && isEveryApiConfigured() && (
+              <div className="form-error">По текущим ручкам API публикация доступна только для приватного челленджа внутри компании.</div>
+            )}
             {draft.visibility === 'private' && <div className="companies-box">
               <div className="companies-heading">
                 <div><strong>Компании</strong><span>Связываем челлендж с компанией</span></div>
@@ -480,10 +735,10 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
           </FormSection>
           <FormSection title="Тип челленджа" subtitle="Выберите тип челленджа">
             <div className="choice-grid">
-              <ChoiceCard selected={draft.challenge_type === 'target'} title="Целевой челлендж" text="Каждый участник стремится выполнить заданную цель" onClick={() => set('challenge_type', 'target')} />
+              <ChoiceCard selected={draft.challenge_type === 'goal_based'} title="Целевой челлендж" text="Каждый участник стремится выполнить заданную цель" onClick={() => set('challenge_type', 'goal_based')} />
               <ChoiceCard selected={draft.challenge_type === 'competitive'} title="Соревновательный" text="Участники соревнуются за место в рейтинге" onClick={() => set('challenge_type', 'competitive')} />
             </div>
-            {draft.challenge_type === 'target' && <Field label={`Цель: ${activityLabels[selectedActivity].toLocaleLowerCase()}`}><input type="number" min="1" value={draft.target_value} onChange={(e) => set('target_value', e.target.value)} /></Field>}
+            {draft.challenge_type === 'goal_based' && <Field label={`Цель: ${activityLabels[selectedActivity].toLocaleLowerCase()}`}><input type="number" min="1" value={draft.target_value} onChange={(e) => set('target_value', e.target.value)} /></Field>}
           </FormSection>
           {draft.challenge_type === 'competitive' && <FormSection title="Формат участия" subtitle="Настройка формата участия и подсчёта результатов">
             <div className="choice-grid">
@@ -522,14 +777,12 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
           <FormSection title="Оформление" subtitle="Добавьте фирменный стиль челленджа">
           
             <div className={`upload-grid ${draft.visibility === 'public' ? 'single' : ''}`}>
-              {draft.visibility === 'private' && 
-              <UploadBox label="Логотип челленджа" note="PNG или SVG, до 5 МБ" />}
-              <UploadBox label="Основная обложка" note="PNG или JPG, 1200×640" />
+              <UploadBox label="Основная обложка" note="PNG или JPG, 1200×640" file={coverFile} onFileChange={setCoverFile} />
             </div>
           </FormSection>
         </div>
       </div>
-      <div className="sticky-actions"><button className="button secondary" onClick={onBack}>Отмена</button><div><button className="button ghost" onClick={() => onSave(false)}>{isEditing ? 'Сохранить изменения' : 'Сохранить черновик'}</button><button className="button primary" onClick={() => onSave(true)}>{isEditing ? 'Обновить челлендж' : 'Опубликовать'}</button></div></div>
+      <div className="sticky-actions"><button className="button secondary" onClick={onBack} disabled={submitting}>Отмена</button><div><button className="button ghost" disabled={submitting} onClick={async () => { setSubmitting(true); await onSave(false, { coverFile, teams }); setSubmitting(false) }}>{isEditing ? 'Сохранить изменения' : 'Сохранить черновик'}</button><button className="button primary" disabled={submitting} onClick={async () => { setSubmitting(true); await onSave(true, { coverFile, teams }); setSubmitting(false) }}>{submitting ? 'Сохраняем...' : isEditing ? 'Обновить челлендж' : 'Опубликовать'}</button></div></div>
       {companyDialogOpen && <div className="modal-backdrop" onMouseDown={() => setCompanyDialogOpen(false)}>
         <section className="company-dialog" role="dialog" aria-modal="true" aria-labelledby="company-dialog-title" onMouseDown={(event) => event.stopPropagation()}>
           <div className="dialog-heading">
@@ -537,10 +790,11 @@ function ChallengeCreate({ draft, isEditing, setDraft, companies, setCompanies, 
             <button onClick={() => setCompanyDialogOpen(false)} aria-label="Закрыть"><X size={20} /></button>
           </div>
           <div className="dialog-body">
+            {notice && <div className="form-error">{notice}</div>}
             <Field label="Название компании"><input autoFocus value={newCompanyName} onChange={(event) => setNewCompanyName(event.target.value)} placeholder="Например, EveryFit" /></Field>
-            <UploadBox label="Логотип компании" note="PNG или SVG, до 5 МБ" />
+            <UploadBox label="Логотип компании" note="PNG или SVG, до 5 МБ" file={companyLogoFile} onFileChange={setCompanyLogoFile} />
           </div>
-          <div className="dialog-actions"><button className="button secondary" onClick={() => setCompanyDialogOpen(false)}>Отмена</button><button className="button primary" disabled={!newCompanyName.trim()} onClick={createCompany}>Создать</button></div>
+          <div className="dialog-actions"><button className="button secondary" disabled={creatingCompany} onClick={() => setCompanyDialogOpen(false)}>Отмена</button><button className="button primary" disabled={!newCompanyName.trim() || creatingCompany} onClick={createCompany}>{creatingCompany ? 'Создаём...' : 'Создать'}</button></div>
         </section>
       </div>}
     </main>
@@ -571,9 +825,8 @@ function TeamTable({ teams, onExport, exporting }: { teams: { name: string; code
   return <><div className="teams-table-toolbar"><span>Сформировано команд: {teams.length}</span><button onClick={onExport} disabled={exporting}><Download size={16} />{exporting ? 'Создаём файл…' : 'Выгрузить Excel'}</button></div><div className="teams-table"><div className="teams-table-head"><span>Команда</span><span>Код</span></div>{teams.map((team) => <div className="teams-table-row" key={team.code}><strong>{team.name}</strong><code>{team.code}</code></div>)}</div></>
 }
 
-function UploadBox({ label, note }: { label: string; note: string }) {
-  const [fileName, setFileName] = useState('')
-  return <label className={`upload-box ${fileName ? 'has-file' : ''}`}><input type="file" accept="image/*" onChange={(e) => setFileName(e.target.files?.[0]?.name ?? '')} /><div><Upload size={21} /></div><strong>{fileName || label}</strong><span>{fileName ? 'Нажмите, чтобы заменить файл' : note}</span></label>
+function UploadBox({ label, note, file, onFileChange }: { label: string; note: string; file: File | null; onFileChange: (file: File | null) => void }) {
+  return <label className={`upload-box ${file ? 'has-file' : ''}`}><input type="file" accept="image/*" onChange={(e) => onFileChange(e.target.files?.[0] ?? null)} /><div><Upload size={21} /></div><strong>{file?.name || label}</strong><span>{file ? 'Нажмите, чтобы заменить файл' : note}</span></label>
 }
 
 function getActivityKey(activityType: ChallengeFormState['activity_type'], metric: ChallengeFormState['metric']): ActivityKey {
@@ -584,23 +837,122 @@ function getActivityKey(activityType: ChallengeFormState['activity_type'], metri
   return 'moves'
 }
 
+function loadCompaniesState(): CompanyRecord[] {
+  if (typeof window === 'undefined') return initialCompanies
+
+  try {
+    const raw = window.localStorage.getItem(STORAGE_KEY)
+    if (!raw) return initialCompanies
+
+    const parsed = JSON.parse(raw)
+    if (!Array.isArray(parsed)) return initialCompanies
+
+    const hasPublicCatalog = parsed.some((company) => company?._id === PUBLIC_COMPANY_ID)
+    return hasPublicCatalog ? parsed : [...initialCompanies, ...parsed]
+  } catch {
+    return initialCompanies
+  }
+}
+
+function parseInviteCodeCsv(csv: string) {
+  const lines = csv.split(/\r?\n/).map((line) => line.trim()).filter(Boolean)
+  for (const line of lines.slice(1)) {
+    const match = line.match(/[A-Z0-9]{5,12}/)
+    if (match) return match[0]
+  }
+  return undefined
+}
+
+function parseParticipantsCountCsv(csv: string) {
+  const lines = csv.split(/\r?\n/).map((line) => line.trim())
+  const headerIndex = lines.findIndex((line) => line.startsWith('Позиция;'))
+  if (headerIndex === -1) return 0
+
+  return lines
+    .slice(headerIndex + 1)
+    .filter((line) => /^\d+;/.test(line))
+    .length
+}
+
+function parseSemicolonCsv(csv: string) {
+  return csv
+    .split(/\r?\n/)
+    .map((line) => {
+      if (!line.trim()) return ['']
+
+      const cells: string[] = []
+      let current = ''
+      let inQuotes = false
+
+      for (let index = 0; index < line.length; index += 1) {
+        const char = line[index]
+        const next = line[index + 1]
+
+        if (char === '"') {
+          if (inQuotes && next === '"') {
+            current += '"'
+            index += 1
+          } else {
+            inQuotes = !inQuotes
+          }
+          continue
+        }
+
+        if (char === ';' && !inQuotes) {
+          cells.push(current.trim())
+          current = ''
+          continue
+        }
+
+        current += char
+      }
+
+      cells.push(current.trim())
+      return cells
+    })
+}
+
+function buildWorksheetColumns(rows: string[][]) {
+  const maxColumns = Math.max(...rows.map((row) => row.length), 1)
+
+  return new Array(maxColumns).fill(null).map((_, columnIndex) => {
+    const width = rows.reduce((max, row) => Math.max(max, row[columnIndex]?.length ?? 0), 10)
+    return { width: Math.min(Math.max(width + 4, 12), 36) }
+  })
+}
+
+function buildCompanyLogoUrl(company: CompanyRecord) {
+  if (company.logo_url) return company.logo_url
+  if (company.logo_id) return `https://api.everyfit.app/v1/images/${company.logo_id}`
+  return undefined
+}
+
 function flattenChallenges(companies: CompanyRecord[]): ChallengeListItem[] {
   return companies.flatMap((company) => company.challenges.map((challenge) => ({
     id: challenge.id,
     company_id: company._id,
     company_name: company._id === PUBLIC_COMPANY_ID ? undefined : company.name,
+    company_logo_url: company._id === PUBLIC_COMPANY_ID ? undefined : buildCompanyLogoUrl(company),
     title: challenge.title,
     challenge_type: challenge.challenge_type,
     activity_key: getActivityKey(challenge.activity_type, challenge.metric),
     participants: challenge.ui_participants,
     period: `${formatShortDate(challenge.start_date)}–${formatShortDate(challenge.end_date)}`,
     status: challenge.ui_status,
+    invite_code: challenge.teams.flatMap((team) => team.invite_codes).find((item) => item.code)?.code,
   })))
 }
 
-function buildTeamsForChallenge(currentChallenge: ChallengeRecord | null, draft: ChallengeFormState, shouldUseTeams: boolean): TeamRecord[] {
+function buildTeamsForChallenge(currentChallenge: ChallengeRecord | null, teams: { name: string; code: string }[], shouldUseTeams: boolean): TeamRecord[] {
   if (!shouldUseTeams) return []
-  return currentChallenge?.teams ?? []
+  if (currentChallenge?.teams.length) return currentChallenge.teams
+  return teams.map((team, index) => ({
+    id: `local-team-${index + 1}`,
+    challenge_id: 'local',
+    name: team.name,
+    members: [],
+    invite_codes: [],
+  }))
 }
 
 function buildTeamName(index: number) {
@@ -638,6 +990,44 @@ function upsertChallenge(
       : [nextChallenge, ...withoutCurrent]
 
     return { ...company, challenges }
+  })
+}
+
+function setInviteCodeForChallenge(companies: CompanyRecord[], companyId: string, challengeId: string, inviteCode: string) {
+  return companies.map((company) => {
+    if (company._id !== companyId) return company
+
+    return {
+      ...company,
+      challenges: company.challenges.map((challenge) => {
+        if (challenge.id !== challengeId) return challenge
+
+        const teams = challenge.teams.length
+          ? challenge.teams.map((team, index) => index === 0
+            ? {
+              ...team,
+              invite_codes: [{
+                code: inviteCode,
+                created_at: new Date().toISOString(),
+                expires_at: challenge.end_date,
+              }],
+            }
+            : team)
+          : [{
+            id: `${challengeId}-team-1`,
+            challenge_id: challengeId,
+            name: company.name,
+            members: [],
+            invite_codes: [{
+              code: inviteCode,
+              created_at: new Date().toISOString(),
+              expires_at: challenge.end_date,
+            }],
+          }]
+
+        return { ...challenge, teams }
+      }),
+    }
   })
 }
 
